@@ -1,94 +1,152 @@
-import usersData from "../mockData/users.json";
+const { ApperClient } = window.ApperSDK;
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const USER_SESSION_KEY = "vogue_vault_user_session";
-
-// Simple hash simulation (NOT for production use)
-const hashPassword = (password) => {
-  return btoa(password + "vogue_vault_salt");
-};
+const apperClient = new ApperClient({
+  apperProjectId: import.meta.env.VITE_APPER_PROJECT_ID,
+  apperPublicKey: import.meta.env.VITE_APPER_PUBLIC_KEY
+});
 
 const authService = {
   login: async (email, password) => {
-    await delay(500);
-    
-    const user = usersData.find((u) => u.email === email);
-    
-    if (!user) {
-      throw new Error("Invalid email or password");
-    }
-    
-    const hashedPassword = hashPassword(password);
-    if (user.password !== hashedPassword) {
-      throw new Error("Invalid email or password");
-    }
-    
-    const { password: _, ...userWithoutPassword } = user;
-    
     try {
-      localStorage.setItem(USER_SESSION_KEY, JSON.stringify(userWithoutPassword));
+      const params = {
+        fields: [
+          { field: { Name: "email_c" } },
+          { field: { Name: "first_name_c" } },
+          { field: { Name: "last_name_c" } },
+          { field: { Name: "phone_c" } },
+          { field: { Name: "addresses_c" } },
+          { field: { Name: "created_at_c" } }
+        ],
+        where: [
+          {
+            FieldName: "email_c",
+            Operator: "EqualTo",
+            Values: [email]
+          }
+        ]
+      };
+
+      const response = await apperClient.fetchRecords("user_profile_c", params);
+
+      if (!response.success) {
+        console.error(response.message);
+        throw new Error("Invalid email or password");
+      }
+
+      if (!response.data || response.data.length === 0) {
+        throw new Error("Invalid email or password");
+      }
+
+      const user = response.data[0];
+
+      return {
+        Id: user.Id,
+        firstName: user.first_name_c || "",
+        lastName: user.last_name_c || "",
+        email: user.email_c || "",
+        phone: user.phone_c || "",
+        addresses: user.addresses_c ? JSON.parse(user.addresses_c) : [],
+        createdAt: user.created_at_c || new Date().toISOString()
+      };
     } catch (error) {
-      console.error("Error saving user session:", error);
+      console.error("Login error:", error);
+      throw error;
     }
-    
-    return userWithoutPassword;
   },
 
   register: async (userData) => {
-    await delay(500);
-    
-    const existingUser = usersData.find((u) => u.email === userData.email);
-    if (existingUser) {
-      throw new Error("Email already registered");
-    }
-    
-    const newUser = {
-      Id: Math.max(...usersData.map((u) => u.Id)) + 1,
-      email: userData.email,
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      password: hashPassword(userData.password),
-      phone: "",
-      addresses: [],
-      createdAt: new Date().toISOString()
-    };
-    
-    usersData.push(newUser);
-    
-    const { password: _, ...userWithoutPassword } = newUser;
-    
     try {
-      localStorage.setItem(USER_SESSION_KEY, JSON.stringify(userWithoutPassword));
+      const checkParams = {
+        fields: [
+          { field: { Name: "email_c" } }
+        ],
+        where: [
+          {
+            FieldName: "email_c",
+            Operator: "EqualTo",
+            Values: [userData.email]
+          }
+        ]
+      };
+
+      const checkResponse = await apperClient.fetchRecords("user_profile_c", checkParams);
+
+      if (checkResponse.success && checkResponse.data && checkResponse.data.length > 0) {
+        throw new Error("Email already registered");
+      }
+
+      const createParams = {
+        records: [
+          {
+            email_c: userData.email,
+            first_name_c: userData.firstName,
+            last_name_c: userData.lastName,
+            phone_c: "",
+            addresses_c: "[]",
+            created_at_c: new Date().toISOString()
+          }
+        ]
+      };
+
+      const response = await apperClient.createRecord("user_profile_c", createParams);
+
+      if (!response.success) {
+        console.error(response.message);
+        throw new Error(response.message);
+      }
+
+      if (response.results) {
+        const successful = response.results.filter(r => r.success);
+        const failed = response.results.filter(r => !r.success);
+
+        if (failed.length > 0) {
+          console.error(`Failed to create user:`, failed);
+          failed.forEach(record => {
+            if (record.errors) {
+              record.errors.forEach(error => {
+                throw new Error(error);
+              });
+            }
+            if (record.message) {
+              throw new Error(record.message);
+            }
+          });
+        }
+
+        if (successful.length > 0) {
+          const newUser = successful[0].data;
+          return {
+            Id: newUser.Id,
+            firstName: newUser.first_name_c || "",
+            lastName: newUser.last_name_c || "",
+            email: newUser.email_c || "",
+            phone: newUser.phone_c || "",
+            addresses: [],
+            createdAt: newUser.created_at_c || new Date().toISOString()
+          };
+        }
+      }
+
+      throw new Error("Failed to create user");
     } catch (error) {
-      console.error("Error saving user session:", error);
+      console.error("Registration error:", error);
+      throw error;
     }
-    
-    return userWithoutPassword;
   },
 
   logout: async () => {
-    await delay(200);
-    
-    try {
-      localStorage.removeItem(USER_SESSION_KEY);
-    } catch (error) {
-      console.error("Error removing user session:", error);
-    }
+    // Authentication handled by Apper SDK
+    return Promise.resolve();
   },
 
   getCurrentUser: () => {
-    try {
-      const session = localStorage.getItem(USER_SESSION_KEY);
-      return session ? JSON.parse(session) : null;
-    } catch (error) {
-      console.error("Error reading user session:", error);
-      return null;
-    }
+    // Authentication state managed by Apper SDK
+    return null;
   },
 
   isAuthenticated: () => {
-    return authService.getCurrentUser() !== null;
+    // Authentication state managed by Apper SDK
+    return false;
   }
 };
 
